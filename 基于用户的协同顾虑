@@ -1,0 +1,277 @@
+ # -*- coding: utf-8 -*-
+"""
+Created on Sat Nov  3 14:34:42 2018
+
+@作者：CHUJUN
+“”
+
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"]="3"
+import re
+from math import sqrt
+import operator
+import numpy as np
+import pandas as pd
+from copy import deepcopy 
+from sklearn.model_selection import train_test_split
+
+#******************************数据处理***************************************************
+
+def load_data():#加载数据
+    #读取User数据
+    users_title = ['UserID', 'Gender', 'Age', 'JobID', 'Zip-code']
+    users = pd.read_table('./ml-1m/users.dat', sep='::', header=None, names=users_title, engine = 'python')
+    users = users.filter(regex='UserID|Gender|Age|JobID')
+    users_orig = users.values#保存一份原始数据
+    #改变User数据中性别和年龄
+    gender_map = {'F':0, 'M':1}
+    users['Gender'] = users['Gender'].map(gender_map)
+
+    age_map = {val:ii for ii,val in enumerate(set(users['Age']))}
+    users['Age'] = users['Age'].map(age_map)
+
+    #读取Movie数据集
+    movies_title = ['MovieID', 'Title', 'Genres']
+    movies = pd.read_table('./ml-1m/movies.dat', sep='::', header=None, names=movies_title, engine = 'python')#读取数据集
+    movies_orig = movies.values
+    #将Title中的年份去掉
+    pattern = re.compile(r'^(.*)\((\d+)\)$')
+
+    title_map = {val:pattern.match(val).group(1) for ii,val in enumerate(set(movies['Title']))}
+    movies['Title'] = movies['Title'].map(title_map)
+
+    #电影类型转数字字典
+    genres_set = set()
+    for val in movies['Genres'].str.split('|'):
+        genres_set.update(val)
+
+    genres_set.add('<PAD>')
+    genres2int = {val:ii for ii, val in enumerate(genres_set)}
+
+    #将电影类型转成等长数字列表，长度是18
+    genres_map = {val:[genres2int[row] for row in val.split('|')] for ii,val in enumerate(set(movies['Genres']))}
+
+    for key in genres_map:
+        for cnt in range(max(genres2int.values()) - len(genres_map[key])):
+            genres_map[key].insert(len(genres_map[key]) + cnt,genres2int['<PAD>'])
+    
+    movies['Genres'] = movies['Genres'].map(genres_map)
+
+    #电影Title转数字字典
+    title_set = set()
+    for val in movies['Title'].str.split():
+        title_set.update(val)
+    
+    title_set.add('<PAD>')
+    title2int = {val:ii for ii, val in enumerate(title_set)}
+
+    #将电影Title转成等长数字列表，长度是15
+    title_count = 15
+    title_map = {val:[title2int[row] for row in val.split()] for ii,val in enumerate(set(movies['Title']))}
+    
+    for key in title_map:
+        for cnt in range(title_count - len(title_map[key])):
+            title_map[key].insert(len(title_map[key]) + cnt,title2int['<PAD>'])
+    
+    movies['Title'] = movies['Title'].map(title_map)
+
+    #读取评分数据集
+    ratings_title = ['UserID','MovieID', 'ratings', 'timestamps']
+    ratings = pd.read_table('./ml-1m/ratings.dat', sep='::', header=None, names=ratings_title, engine = 'python')
+    ratings = ratings.filter(regex='UserID|MovieID|ratings')#.filter创建新的数组
+
+    #合并三个表
+    data = pd.merge(pd.merge(ratings, users), movies)
+    #将数据分成X和y两张表
+    target_fields = ['ratings']
+    features_pd, targets_pd = data.drop(target_fields, axis=1), data[target_fields]
+    
+    features = features_pd.values#索引特征中有用的价值
+    targets_values = targets_pd.values
+    
+    return title_count, title_set, genres2int, features, targets_values, ratings, users, movies, data, movies_orig, users_orig
+
+
+
+title_count, title_set, genres2int, features, targets_values, ratings, users, movies, data, movies_orig, users_orig = load_data()
+
+
+
+ #测试集用户电影评分字典   
+    
+#用户i对所有项目的平均评分=用户i的项目总评分/用户i的项目长度（users[i]得到的是内嵌项目评分字典）字典的长度为键值的个数
+
+
+
+#pearson相似度（两个随机变量的相关程度）两个用户对同一项目评分的相似度                                                                               2 计算相似度sim（u，i）得到最近邻居用户，获得从大到小排序的相似度列表
+def pearson(rate1,rate2):#rate代表项目评分字典
+    sum_xy = 0
+    sum_x=0
+    sum_y=0
+    sum_x2=0
+    sum_y2=0
+    n=0  #n为样本量
+    for key in rate1:#遍历rate1字典的项目
+        if key in rate2:#只计算共同项目
+            n+=1
+            x=rate1[key]#key代表项目，rate[key]返回评分
+            y=rate2[key]
+            sum_xy += x*y#x*y的求和
+            sum_x +=x#x的求和
+            sum_y +=y#y的求和
+            sum_x2 +=x*x#x*x的求和
+            sum_y2 +=y*y#y*y的求和
+            
+    if n==0:#计算距离     
+        return 0
+    else:                              
+        sx=sqrt(sum_x2-(pow(sum_x,2)/n))#pow语句在此含义为对x的和求平方，根号下x的平方减x和的平方除以n
+        sy=sqrt(sum_y2-(pow(sum_y,2)/n))#根号下y的平方减y和的平方除以n
+        if sx!=0 and sy!=0:#若以上的两个数据sx,sy均不为0
+            denominator=(sum_xy-sum_x*sum_y/n)/sx/sy#得到pearson相似度,,,,,,皮尔逊相关系数
+        else:
+            denominator=0
+    return denominator #返回的denominator是相似度
+#print denominator
+#返回最近距离用户
+
+ #用来存相似度的列表
+def computeNearestNeighbor(user): #定义最近邻居集合，user是传入测试集当中的用户      
+    distances=[]                                                # 获取对应最近邻居集用户ID对项目的平均评分                                             
+    for key in train.keys(): #遍历大字典的用户，计算除自己以外的用户或者项目之间的pearson相似度
+        if key!=user:#若大字典当中的用户不是测试集中的用户
+            distance = pearson(train[user],train[key])#（调用求相似度函数）获取相似度（参数为不同用户的项目评分字典）
+            #以下是取相似度大于0.2(这个值自己定) 的相似用户或者项目           
+            if distance>=0.6: 
+                distances.append((distance,key))#将用户及其相似度放入相似度列表 
+    distances.sort(reverse=True) #以相似度大小进行排序   
+    #s=sorted(distances.items(), key=lambda asd:asd[1], reverse = True )      testuser    
+    return distances
+
+def results1(m,s):
+    with open('.\基于用户的协同过滤结果统计','a') as f:
+        f.write("此次运行的"+s+str(m)+'\n') 
+        
+ 
+        
+#*********************************测试和计算MAE************************************************  
+#if __name__ == '__main__':#自我测试代码，确定是执行还是导入                                                      
+def MAE(test,train):    
+    for testuser in test.items():
+        if testuser[0] not in train.keys():
+            del train[testuser[0]]
+    allsum=0#所有和为0
+    allrmsemovie=0
+    eachrmsesum=0   
+    alluser=0   
+    allrmse=0
+    for testuser in test.items():#循环遍历测试集用户 
+        alluser+=1         
+        usersum=0 #用来累加预测评分 
+        count=0 #用来累加用户的评分项目数
+        eachrmsesum=0
+        userdistances=computeNearestNeighbor(testuser[0])#（调用求最近邻居函数）获取用户相似度列表   
+        usertestaverage=averageUsers[testuser[0]]#测试集中的用户对所有项目的平均评分(u的平均)
+        for item in testuser[1].items():               
+            o=item[0]#获取项目ID
+            testrating=item[1]#获取评分，并且转化为实型
+            usersumSim=0#用户相似度之和，初始为0（分子）
+            usersumrating=0#用户评分之和，初始为0（分母）
+            for simuser in userdistances:#用simuser遍历用户相似度列表的用户和相似度    
+                if o in train[simuser[1]]:#simuser[1]获取的是最近用户ID，如果项目o被该ID的用户所评分，则条件成立（users[simuser[1]]得到项目评分）
+                    usersumSim=usersumSim+simuser[0]#将用户相似度累加起来，方便后面计算
+                    usersumrating=usersumrating+simuser[0]*(train[simuser[1]][o]-averageUsers[simuser[1]])#论文中的预测评分公式
+            if usersumSim==0:#如果分母不等于0
+                r=usertestaverage
+            else:
+                r=usertestaverage+usersumrating/usersumSim#论文中的预测评分公式
+            #输出预测评分
+                #print ("user"+str(u)+" to item"+str(o)+" rating is "+str(r))    
+            #以下是对基于项目和基于用户的协同过滤进行加权处理
+            usersum=usersum+abs(r-testrating)#abs返回绝对值（预测评分-实际评分）
+            count=count+1
+            allrmsemovie+=1
+            eachrmsesum=eachrmsesum+(r-testrating)*(r-testrating)
+            
+        eachMAE=usersum/count 
+        eachrmase=sqrt(eachrmsesum/count)
+        allrmse=allrmse+eachrmase
+        allsum=allsum+eachMAE                                                                                             #计算每一个用户的平均MAE
+        print ("user"+str(testuser[0])+" MAE is "+str(eachMAE))
+         
+    #将每个用户的平均MAE进行累加
+    avgrmse=allrmse/alluser
+    avgmae=allsum/alluser
+    s="MAE为："
+    results1(avgmae,s)
+    s="RMSE为："
+    results1(avgrmse,s)
+    return avgmae,avgrmse
+    #print ("averageMAE is "+str(allsum/alluser))#求出累加后的平均值
+    #print ("averageRMSE is "+str(avgrmse))#求出累加后的平均值
+def data(train_X,test_X, train_y, test_y):
+    train=dict()
+    P=dict()
+    test=dict()
+    O=dict()
+    list1=[]
+    list2=[]                                                                                                                                                                               
+    a=np.array(8)
+    for x,y in zip(train_X,train_y): 
+        a=np.hstack((x,y)) 
+        list1.append(a)          
+    #根据一个关键字排序
+    list1.sort(key=operator.itemgetter(0))         
+    b=np.array(8)
+    for x,y in zip(test_X,test_y): 
+        b=np.hstack((x,y)) 
+        list2.append(b)
+    list2.sort(key=operator.itemgetter(0)) 
+    #训练集用户电影评分字典
+    for item in list1:
+        u=item[0]
+        o=item[1]
+        rating=item[7]
+        P[o]=rating
+        if u in train.keys():
+            train[u].update(deepcopy(P))
+        else:
+            train[u]=deepcopy(P)
+        P.clear()
+    for item in list2:
+        u=item[0]
+        o=item[1]
+        rating=item[7]
+        O[o]=rating
+        if u in test.keys():
+            test[u].update(deepcopy(O))
+        else:
+            test[u]=deepcopy(O)
+        O.clear()  
+    return test,train
+
+
+for i in range(1,6): 
+    summae=0
+    summrse=0
+    au=0
+    averageUsers=dict() 
+    train_X,test_X, train_y, test_y = train_test_split(features,targets_values,test_size = 0.2, random_state = 0 )                             
+    test,train=data(train_X,test_X, train_y, test_y)
+    for i in train.items():#用i遍历用户项目评分大字典中的用户（键值）
+        sum=0
+        for j in i[1].values():#用j遍历用户i评分过的项目（内嵌列表的键值）
+            sum=sum+j #应该代表用户参加评分的项目（用户i对物品j的评分）回到遍历用户的for，直到用户遍历完全
+        averageUsers[i[0]]=sum/len(i[1])  # 项目平均评分字典
+    eachmae,eachrmse=MAE(test,train) 
+    summae+=eachmae
+    summrse+=eachrmse
+
+s="平均 MAE为："
+results1(summae/5,s)        
+s="平均RMSE为："
+results1(summrse/5,s)
+
+
+#*********************************测试部分************************************************   
+
